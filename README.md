@@ -9,7 +9,7 @@ To facilitate API development and testing, the Spoolman Updater API utilizes Swa
 > [!TIP]
 > The new UI add abilities to set which spool is in which tray of the AMS. Also there is a scan button (top right) that allows you to scan a barcode/qrcode on a spool and that will lead to a page where you can set in which tray the spool is.
 
-## PLEASE READ ALL THE INSTRUCTIONS, THERE IS A DIFFERENCE BASED ON THE VERSION OF YOUR BAMBU LAB HA INTEGRATION
+## PLEASE READ ALL THE INSTRUCTIONS, THERE IS A DIFFERENCE BASED ON THE PRINTER YOU HAVE
 
 ## Base URL
 
@@ -63,105 +63,10 @@ docker run -d -p 8088:8080 \
 
 The Spoolman Updater API can be integrated into Home Assistant automations to track filament usage automatically.
 
-# ***Below is for Bambu Lab integration 2.1.8 and below.**
+# MAKE SURE YOU RUN AT LEAST BAMBU LAB INTEGRATION 2.1.9 AND ABOVE, OTHERWISE IT WILL NOT WORK. If you encounter issues, please use the community forum or create an issue.
 
-### **1. Define a REST Command in `configuration.yaml`**
 
-Add the following to your `configuration.yaml` to create a REST command that updates the spool:
-
-```yaml
-rest_command:
-  update_spool:
-    url: "http://<your-server>:8088/Spools"
-    method: POST
-    headers:
-      Content-Type: "application/json"
-    payload: >
-      {
-        "name": "{{ filament_name }}",
-        "material": "{{ filament_material }}",
-        "tag_uid": "{{ filament_tag_uid }}",
-        "used_weight": {{ filament_used_weight | int }},
-        "color": "{{ filament_color }}",
-        "active_tray_id": "{{ filament_active_tray_id }}"
-      }
-```
-### **2. Create the sensors**
-
-```yaml
-utility_meter:
-  bambulab_filament_usage_meter:
-    unique_id: 148d1e2d-87b2-4883-a923-a36a2c9fa0ac
-    source: sensor.bambulab_filament_usage
-    cycle: weekly
-
-```
-and 
-
-```yaml
-sensor:
-  - platform: template
-    sensors:
-      bambulab_filament_usage:
-        unique_id: b954300e-d3a2-44ab-948f-39c30b2f0c00
-        friendly_name: "Bambu Lab Filament Usage"
-        value_template: "{{ states('sensor.bambu_lab_p1s_gewicht_van_print') | float(0) / 100 * states('sensor.bambu_lab_p1s_printvoortgang') | float(0) }}"
-        availability_template: "{% if is_state('sensor.bambu_lab_p1s_gewicht_van_print', 'unknown') or is_state('sensor.bambu_lab_p1s_gewicht_van_print', 'unavailable') %} false {% else %} true {%- endif %}"
-```
-
-Don't forget to change the sensor ids to your own :)
-
-### **3. Create an Automation**
-
-The following automation updates the spool when a print finishes or when the AMS tray switches:
-
-```yaml
-alias: Bambulab - Update Spool When Print Finishes or Tray Switches
-description: ""
-triggers:
-  - trigger: state
-    entity_id:
-      - sensor.x1c_active_tray_index
-conditions:
-  - condition: template
-    value_template: "{{ trigger.from_state.state not in ['unknown', 'unavailable'] }}"
-  - condition: template
-    value_template: "{{ trigger.from_state.state | int > 0 }}"
-actions:
-  - variables:
-      tray_number: >-
-        {{ trigger.from_state.state if trigger.entity_id ==
-        'sensor.x1c_active_tray_index' else
-        states('sensor.x1c_active_tray_index') }}
-      tray_sensor: sensor.x1c_00m09c422100420_ams_1_tray_{{ tray_number }}
-      tray_weight: >-
-        {{ states('sensor.bambulab_filament_usage_meter') | float(0) | round(2)
-        }}
-      tag_uid: "{{ state_attr(tray_sensor, 'tag_uid') }}"
-      material: "{{ state_attr(tray_sensor, 'type') }}"
-      name: "{{ state_attr(tray_sensor, 'name') }}"
-      color: "{{ state_attr(tray_sensor, 'color') }}"
-  - data:
-      filament_name: "{{ name }}"
-      filament_material: "{{ material }}"
-      filament_tag_uid: "{{ tag_uid }}"
-      filament_used_weight: "{{ tray_weight }}"
-      filament_color: "{{ color }}"
-      filament_active_tray_id: "{{ tray_sensor | replace('sensor.', '') }}"
-    action: rest_command.update_spool
-  - action: utility_meter.calibrate
-    data:
-      value: "0"
-    target:
-      entity_id: sensor.bambulab_filament_usage_meter
-
-```
-
-This automation ensures that the filament usage is automatically updated in Spoolman when a print is completed or the AMS tray is changed.
-
----
-
-# ***FOR Bambu Lab integration 2.1.9 and above for P1S/X1C, This will update Spoolman with every tray change during Multi Color Printing**
+# ***P1S/X1C (maybe the H2D) This will update Spoolman with every tray change during Multi Color Printing**
 
 This counts for the P1S and most likely for the X1C also:
 
@@ -234,87 +139,117 @@ rest_command:
           'sensor.ID_PRINTER_ams_1_tray_4'
         ]) | selectattr('attributes.active','defined') | list | count > 0 }}
 ```
+### *** NOTE: If you have more then one AMS, you need to state them into the tray_index sensor.
 
-### **3. Create an Automation. Below is the automation including log write for easy troubleshooting. Place this automation in your automations.yaml**
+### **3. Create an Automation. Below is the automation including log write for easy troubleshooting. Place this automation in your automations.yaml. You can always change the name that is logged into the log, it is now in Dutch :)**
 
 ```yaml
-- id: '1755865274550'
-  alias: Bambulab - Update Spool
-  description: Automation with tray-logging
-  triggers:
-  - entity_id: sensor.bambulab_ams1_tray_index
-    trigger: state
+alias: Bambulab - Update Spool
+description: Update spool
+triggers:
+  - entity_id: sensor.ID_PRINTER_active_tray_index
+    id: tray
+    platform: state
+
   - entity_id: sensor.ID_PRINTER_current_stage
+    id: print_end
+    platform: state
     to:
-    - finished
-    - idle
-    trigger: state
-  conditions:
-  - condition: template
-    value_template: '{{ states(''sensor.bambulab_ams1_tray_index'')|int(-1) >= 0 }}'
-  - condition: or
-    conditions:
-    - condition: template
-      value_template: '{{ trigger.entity_id != ''sensor.bambulab_ams1_tray_index''
-        }}'
-    - condition: template
-      value_template: '{{ states(''sensor.ID_PRINTER_current_stage'') ==
-        ''printing'' }}'
-  actions:
-  - variables:
-      tray_number: "{% if trigger.entity_id == 'sensor.bambulab_ams1_tray_index' %}\n
-        \ {{ trigger.from_state.state | int }}\n{% else %}\n  {{ states('sensor.bambulab_ams1_tray_index')
-        | int }}\n{% endif %}"
-      tray_sensor: sensor.ID_PRINTER_ams_1_tray_{{ tray_number }}
-      tray_weight: '{{ states(''sensor.bambulab_filament_usage_meter'') | float(0)
-        | round(2) }}'
-      tag_uid: '{{ state_attr(tray_sensor, ''tag_uid'') }}'
-      material: '{{ state_attr(tray_sensor, ''type'') }}'
-      name: '{{ state_attr(tray_sensor, ''name'') }}'
-      color: '{{ state_attr(tray_sensor, ''color'') }}'
+      - finished
+      - idle
+
+variables:
+  old_tray: >-
+    {% if trigger.id == 'tray'
+       and trigger.from_state is not none
+       and trigger.from_state.state not in ['', 'unknown', 'unavailable', None] %}
+       {{ trigger.from_state.state | int }}
+    {% else %}
+       None
+    {% endif %}
+
+  tray_number: >-
+    {% if trigger.id == 'print_end' %}
+      {% set t = states('sensor.ID_PRINTER_active_tray_index') %}
+      {% if t not in ['', 'unknown', 'unavailable', None] %}
+        {{ t | int }}
+      {% else %}
+        None
+      {% endif %}
+    {% else %}
+      {{ old_tray }}
+    {% endif %}
+
+  tray_sensor: >-
+    {% if tray_number and tray_number > 0 %}
+      sensor.ID_PRINTER_ams_1_tray_{{ tray_number }}
+    {% else %}
+      None
+    {% endif %}
+
+  tray_weight: "{{ states('sensor.ID_PRINTER_filament_usage_meter') | float(0) | round(2) }}"
+  tag_uid: "{{ state_attr(tray_sensor, 'tag_uid') if tray_sensor else None }}"
+  material: "{{ state_attr(tray_sensor, 'type') if tray_sensor else None }}"
+  name: "{{ state_attr(tray_sensor, 'name') if tray_sensor else None }}"
+  color: "{{ state_attr(tray_sensor, 'color') if tray_sensor else None }}"
+
+action:
   - choose:
-    - conditions:
-      - condition: template
-        value_template: '{{ trigger.entity_id == ''sensor.bambulab_ams1_tray_index''
-          }}'
-      sequence:
-      - action: system_log.write
-        data:
-          message: 'Tray-change: from tray {{ trigger.from_state.state }} to {{ trigger.to_state.state
-            }}. Weight booked on tray {{ tray_number }}. Filament: {{ name }} ({{
-            material }}) Weight: {{ tray_weight }} g Color: {{ color }} Tag UID:
-            {{ tag_uid }}'
-          level: info
-    default:
-    - action: system_log.write
-      data:
-        message: 'Print-end: tray {{ tray_number }} Filament: {{ name }} ({{ material
-          }}) Weight: {{ tray_weight }} g Color: {{ color }} Tag UID: {{ tag_uid
-          }}'
-        level: info
-  - data:
-      filament_name: '{{ name }}'
-      filament_material: '{{ material }}'
-      filament_tag_uid: '{{ tag_uid }}'
-      filament_used_weight: '{{ tray_weight }}'
-      filament_color: '{{ color }}'
-      filament_active_tray_id: '{{ tray_sensor | replace(''sensor.'', '''') }}'
-    action: rest_command.update_spool
-  - data:
-      value: '0'
-    target:
-      entity_id: sensor.bambulab_filament_usage_meter
-    action: utility_meter.calibrate
-  mode: single
+
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'tray' and old_tray is not none and old_tray > 0 }}"
+        sequence:
+          - service: rest_command.update_spool
+            data:
+              filament_name: "{{ name }}"
+              filament_material: "{{ material }}"
+              filament_tag_uid: "{{ tag_uid }}"
+              filament_used_weight: "{{ tray_weight }}"
+              filament_color: "{{ color }}"
+              filament_active_tray_id: "{{ tray_sensor | replace('sensor.', '') if tray_sensor else '' }}"
+
+          - service: utility_meter.calibrate
+            target:
+              entity_id: sensor.ID_PRINTER_filament_usage_meter
+            data:
+              value: "0"
+
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ trigger.id == 'print_end'
+                 and tray_number is not none and tray_number > 0
+                 and trigger.from_state is not none
+                 and trigger.from_state.state in ['printing','pause'] }}
+        sequence:
+          - service: rest_command.update_spool
+            data:
+              filament_name: "{{ name }}"
+              filament_material: "{{ material }}"
+              filament_tag_uid: "{{ tag_uid }}"
+              filament_used_weight: "{{ tray_weight }}"
+              filament_color: "{{ color }}"
+              filament_active_tray_id: "{{ tray_sensor | replace('sensor.', '') if tray_sensor else '' }}"
+
+          - service: utility_meter.calibrate
+            target:
+              entity_id: sensor.ID_PRINTER_filament_usage_meter
+            data:
+              value: "0"
+
+mode: single
+
 
 ```
+# MAKE SURE YOU RUN AT LEAST BAMBU LAB INTEGRATION 2.1.9 AND ABOVE, OTHERWISE IT WILL NOT WORK.
 
-# ***FOR Bambu Lab integration 2.1.9 and above H2S/H2D. This will update Spoolman with every tray change during Multi Color Printing**
+# ***FOR Bambu Lab H2S/P2S This will update Spoolman with every tray change during Multi Color Printing**
 
-This counts for the H2S and most likely for the H2D also.
-The H2S and possible the H2D also, need and adjustment. The active AMS tray for the P1S remains active after print. Meaning the automation works without issues.
+This counts for the H2S/P2S, but most likely not the H2D.
+The H2S/P2S need an adjustment that isn't needed for the P1S. The active AMS tray for the P1S remains active after print. Meaning the automation works without issues.
 With the H2S the active tray becomes directly inactive after the print, which prevents the automation to fire. For this to work you need to create a helper and automation
-Utility meter, rest command and sensors remain the same as for the P1S. Follow step 1 and 2 for the P1S instructions.
+Utility meter, rest command and sensors remain the same as for the P1S. First follow step 1 and 2 for the P1S instructions and then step 3 below.
 
 ### **3. Create the helper in the configurations.yaml** 
 
@@ -329,11 +264,11 @@ input_number:
     step: 1
 ```
 
-### **4. Create an Automation. Below is the automation including log write for easy troubleshooting. Place this automation in your automations.yaml** 
+### **4. Create an Automation. Below is the automation including log write for easy troubleshooting. Place this automation in your automations.yaml. You can always change the name that is logged into the log, it is now in Dutch :)** 
 
 ```yaml
-- id: '1756972720618'
-  alias: Bambulab - Update Spool (with last_tray helper + debug )
+- id: '1764680179439'
+  alias: Bambulab - Update Spool
   description: Update spool
   triggers:
   - entity_id: sensor.bambulab_ams1_tray_index
@@ -348,36 +283,14 @@ input_number:
   actions:
   - choose:
     - conditions:
-      - condition: trigger
-        id: tray
+      - condition: template
+        value_template: '{{ trigger.id == ''tray'' and old_tray is not none and old_tray
+          > 0 }}'
       sequence:
-      - target:
-          entity_id: input_number.bambulab_last_tray
-        data:
-          value: '{{ trigger.to_state.state | int }}'
-        action: input_number.set_value
       - data:
-          message: 'Tray change: input_number.bambulab_last_tray -> {{ trigger.to_state.state
+          message: 'Tray wissel: oude tray {{ old_tray }} → {{ name }} ({{ material
+            }}), Gewicht: {{ tray_weight }} g, Kleur: {{ color }}, Tag UID: {{ tag_uid
             }}'
-          level: info
-        action: system_log.write
-    - conditions:
-      - condition: trigger
-        id: print_end
-      sequence:
-      - variables:
-          tray_number: '{{ states(''input_number.bambulab_last_tray'') | int }}'
-          tray_sensor: sensor.ID_PRINTER_ams_1_tray_{{ tray_number }}
-          tray_weight: '{{ states(''sensor.bambulab_filament_usage_meter'') | float(0)
-            | round(2) }}'
-          tag_uid: '{{ state_attr(tray_sensor, ''tag_uid'') }}'
-          material: '{{ state_attr(tray_sensor, ''type'') }}'
-          name: '{{ state_attr(tray_sensor, ''name'') }}'
-          color: '{{ state_attr(tray_sensor, ''color'') }}'
-      - data:
-          message: 'Print end trigger. Last Tray: {{ tray_number }} ({{ name
-            }} - {{ material }}) Weight: {{ tray_weight }}g Color: {{ color }} Tag
-            UID: {{ tag_uid }}'
           level: info
         action: system_log.write
       - data:
@@ -393,10 +306,55 @@ input_number:
         data:
           value: '0'
         action: utility_meter.calibrate
+      - target:
+          entity_id: input_number.bambulab_last_tray
+        data:
+          value: '{{ trigger.to_state.state | int(default=old_tray) }}'
+        action: input_number.set_value
+      - data:
+          message: input_number.bambulab_last_tray → {{ trigger.to_state.state | int(default=old_tray)
+            }}
+          level: info
+        action: system_log.write
+    - conditions:
+      - condition: template
+        value_template: '{{ trigger.id == ''print_end'' and tray_number is not none
+          and tray_number > 0 }}'
+      sequence:
+      - data:
+          message: 'Print-einde: Tray {{ tray_number }} → {{ name }} ({{ material
+            }}), Gewicht: {{ tray_weight }} g'
+          level: info
+        action: system_log.write
+      - data:
+          filament_name: '{{ name }}'
+          filament_material: '{{ material }}'
+          filament_tag_uid: '{{ tag_uid }}'
+          filament_used_weight: '{{ tray_weight }}'
+          filament_color: '{{ color }}'
+          filament_active_tray_id: '{{ tray_sensor | replace(''sensor.'', '''') }}'
+        action: rest_command.update_spool
+      - target:
+          entity_id: sensor.bambulab_filament_usage_meter
+        data:
+          value: '0'
+        action: utility_meter.calibrate
+  variables:
+    old_tray: "{% if trigger.id == 'tray'\n      and trigger.from_state.state not
+      in [None, '', 'unknown', 'unavailable'] %}\n  {{ trigger.from_state.state |
+      int }}\n{% else %}\n  None\n{% endif %}"
+    tray_number: "{% if trigger.id == 'print_end' %}\n  {{ states('input_number.bambulab_last_tray')
+      | int }}\n{% else %}\n  {{ old_tray }}\n{% endif %}"
+    tray_sensor: "{% if tray_number %}\n  sensor.ID_PRINTER_ams_1_tray_{{
+      tray_number }}\n{% else %}\n  None\n{% endif %}"
+    tray_weight: '{{ states(''sensor.bambulab_filament_usage_meter'') | float(0) |
+      round(2) }}'
+    tag_uid: '{{ state_attr(tray_sensor, ''tag_uid'') if tray_sensor else None }}'
+    material: '{{ state_attr(tray_sensor, ''type'') if tray_sensor else None }}'
+    name: '{{ state_attr(tray_sensor, ''name'') if tray_sensor else None }}'
+    color: '{{ state_attr(tray_sensor, ''color'') if tray_sensor else None }}'
   mode: single
-
 ```
-### It might be that the automation for the H2S also works for the P1S but this is untested.
 
 
 
