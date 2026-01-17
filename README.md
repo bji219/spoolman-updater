@@ -388,9 +388,12 @@ This section shows how to extend your Home Assistant setup to track print costs,
 Add these sections to your Home Assistant `configuration.yaml`:
 
 ```yaml
-# Shell command for CSV logging
-shell_command:
-  log_print_to_csv: "/bin/bash -c 'echo \"{{ message }}\" >> /config/bambu_print_history.csv'"
+# CSV logging using notify service (more reliable than shell_command)
+notify:
+  - name: bambu_print_csv
+    platform: file
+    filename: /config/bambu_print_history.csv
+    timestamp: false
 
 # Input Helpers
 input_number:
@@ -516,10 +519,9 @@ Add this automation to your `automations.yaml`:
         material_color: '{{ state_attr(tray_sensor, "color") }}'
 
     # Write to CSV file
-    - action: shell_command.log_print_to_csv
+    - action: notify.bambu_print_csv
       data:
-        message: >
-          {{ print_count }},{{ timestamp }},{{ material_name }},{{ material_type }},{{ material_color }},{{ weight_used }},{{ print_cost }},{{ new_total }}
+        message: "{{ print_count }},{{ timestamp }},{{ material_name }},{{ material_type }},{{ material_color }},{{ weight_used }},{{ print_cost }},{{ new_total }}"
 
     # Update print counter
     - action: input_number.set_value
@@ -591,7 +593,18 @@ Add this automation to your `automations.yaml`:
 
 ### CSV Print History
 
-The automation creates a CSV file at `/config/bambu_print_history.csv` with the following format:
+The automation logs to a CSV file at `/config/bambu_print_history.csv`.
+
+**Important**: You must create this file manually first with the header row:
+
+1. In Home Assistant, go to **File Editor** or use SSH
+2. Create `/config/bambu_print_history.csv` with this content:
+
+```csv
+Print#,Date,Material Name,Material Type,Color,Weight(g),Cost($),Total Cost($)
+```
+
+After the automation runs, it will append data like this:
 
 ```csv
 Print#,Date,Material Name,Material Type,Color,Weight(g),Cost($),Total Cost($)
@@ -656,6 +669,30 @@ entities:
     name: Print #-1
   - entity: input_text.bambu_lab_print_3
     name: Print #-2
+```
+
+### Troubleshooting CSV Logging
+
+If the CSV file isn't being updated:
+
+1. **Check file exists**: Make sure `/config/bambu_print_history.csv` exists with the header row
+2. **Check permissions**: Ensure Home Assistant has write access to the `/config` directory
+3. **Verify notify service**: Check **Developer Tools > Services** and search for `notify.bambu_print_csv`
+4. **Check logs**: Look in **Settings > System > Logs** for any errors from the notify service
+5. **Restart HA**: After adding the notify configuration, restart Home Assistant
+
+**Alternative method using shell_command** (if notify doesn't work):
+
+```yaml
+shell_command:
+  log_print_to_csv: "echo '{{ message }}' >> /config/bambu_print_history.csv"
+```
+
+Then in the automation, use:
+```yaml
+- action: shell_command.log_print_to_csv
+  data:
+    message: "{{ print_count }},{{ timestamp }},{{ material_name }},{{ material_type }},{{ material_color }},{{ weight_used }},{{ print_cost }},{{ new_total }}"
 ```
 
 ---
