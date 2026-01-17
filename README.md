@@ -367,6 +367,299 @@ Just go to the base of the URL of the API. So for example if your API url is <ht
 
 Here you can set which spool is in which tray.
 
+---
+
+## Cost Estimation and Print History Tracking
+
+This section shows how to extend your Home Assistant setup to track print costs, maintain print history, and calculate filament expenses using Spoolman and Spoolman Updater.
+
+### Features
+
+- **Automatic cost calculation** per print based on filament type
+- **Print history logging** to CSV file
+- **Cost tracking sensors** for daily/weekly/monthly expenses
+- **Print counter** and recent prints display
+- **Material cost database** with configurable prices per filament type
+
+### Configuration
+
+#### 1. Add to `configuration.yaml`
+
+Add these sections to your Home Assistant `configuration.yaml`:
+
+```yaml
+# Shell command for CSV logging
+shell_command:
+  log_print_to_csv: "/bin/bash -c 'echo \"{{ message }}\" >> /config/bambu_print_history.csv'"
+
+# Input Helpers
+input_number:
+  bambu_lab_total_filament_cost_helper:
+    name: Bambu Lab Total Filament Cost Helper
+    min: 0
+    max: 100000
+    step: 0.01
+    unit_of_measurement: USD
+    icon: mdi:currency-usd
+    mode: box
+
+  bambu_lab_print_counter:
+    name: Bambu Lab Print Counter
+    min: 0
+    max: 100000
+    step: 1
+    icon: mdi:counter
+    mode: box
+
+input_text:
+  bambu_lab_print_1:
+    name: Bambu Lab Print 1
+    max: 255
+    initial: ""
+
+  bambu_lab_print_2:
+    name: Bambu Lab Print 2
+    max: 255
+    initial: ""
+
+  bambu_lab_print_3:
+    name: Bambu Lab Print 3
+    max: 255
+    initial: ""
+
+  bambu_lab_print_4:
+    name: Bambu Lab Print 4
+    max: 255
+    initial: ""
+
+  bambu_lab_print_5:
+    name: Bambu Lab Print 5
+    max: 255
+    initial: ""
+
+# Template sensors for cost tracking
+template:
+  - sensor:
+      # Cost tracking sensors
+      - name: Bambu Lab Total Filament Cost
+        unique_id: bambu_lab_total_filament_cost
+        unit_of_measurement: "USD"
+        device_class: monetary
+        state: >
+          {{ states('input_number.bambu_lab_total_filament_cost_helper') | float(0) | round(2) }}
+
+      - name: Bambu Lab Average Print Cost
+        unique_id: bambu_lab_average_print_cost
+        unit_of_measurement: "USD"
+        device_class: monetary
+        state: >
+          {% set total = states('input_number.bambu_lab_total_filament_cost_helper') | float(0) %}
+          {% set count = states('input_number.bambu_lab_print_counter') | int(0) %}
+          {% if count > 0 %}
+            {{ (total / count) | round(2) }}
+          {% else %}
+            0
+          {% endif %}
+
+# Utility meters for cost tracking
+utility_meter:
+  bambu_lab_daily_cost:
+    source: sensor.bambu_lab_total_filament_cost
+    cycle: daily
+
+  bambu_lab_weekly_cost:
+    source: sensor.bambu_lab_total_filament_cost
+    cycle: weekly
+
+  bambu_lab_monthly_cost:
+    source: sensor.bambu_lab_total_filament_cost
+    cycle: monthly
+```
+
+#### 2. Create Print Cost Tracking Automation
+
+Add this automation to your `automations.yaml`:
+
+```yaml
+- id: 'bambulab_track_print_cost_with_logging'
+  alias: Bambulab - Track Print Cost with History
+  description: Records filament cost and logs to CSV
+  triggers:
+    - entity_id: sensor.p1s_print_status
+      to: finish
+      trigger: state
+  conditions:
+    - condition: template
+      value_template: '{{ trigger.from_state.state == ''running'' }}'
+  actions:
+    - variables:
+        tray_number: '{{ states(''sensor.bambu_lab_last_active_tray'') | int(-1) }}'
+        tray_sensor: sensor.ams_tray_{{ tray_number }}
+        weight_used: '{{ states(''sensor.bambulab_filament_usage_meter'') | float(0) }}'
+        material_type: '{{ state_attr(tray_sensor, "type") | lower }}'
+        cost_per_kg: >
+          {% set cost_map = {
+            'pla': 22.99,
+            'pla basic': 22.99,
+            'petg': 25.00,
+            'abs': 30.00,
+            'tpu': 35.00,
+            'asa': 32.00
+          } %}
+          {{ cost_map.get(material_type, 20.00) }}
+        print_cost: '{{ (weight_used / 1000 * cost_per_kg) | round(2) }}'
+        current_total: '{{ states(''input_number.bambu_lab_total_filament_cost_helper'') | float(0) }}'
+        new_total: '{{ (current_total + print_cost) | round(2) }}'
+        print_count: '{{ states(''input_number.bambu_lab_print_counter'') | int(0) + 1 }}'
+        timestamp: '{{ now().strftime("%Y-%m-%d %H:%M:%S") }}'
+        material_name: '{{ state_attr(tray_sensor, "name") }}'
+        material_color: '{{ state_attr(tray_sensor, "color") }}'
+
+    # Write to CSV file
+    - action: shell_command.log_print_to_csv
+      data:
+        message: >
+          {{ print_count }},{{ timestamp }},{{ material_name }},{{ material_type }},{{ material_color }},{{ weight_used }},{{ print_cost }},{{ new_total }}
+
+    # Update print counter
+    - action: input_number.set_value
+      target:
+        entity_id: input_number.bambu_lab_print_counter
+      data:
+        value: '{{ print_count }}'
+
+    # Update total cost
+    - action: input_number.set_value
+      target:
+        entity_id: input_number.bambu_lab_total_filament_cost_helper
+      data:
+        value: '{{ new_total }}'
+
+    # Rotate print history for dashboard display
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.bambu_lab_print_5
+      data:
+        value: '{{ states(''input_text.bambu_lab_print_4'') }}'
+
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.bambu_lab_print_4
+      data:
+        value: '{{ states(''input_text.bambu_lab_print_3'') }}'
+
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.bambu_lab_print_3
+      data:
+        value: '{{ states(''input_text.bambu_lab_print_2'') }}'
+
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.bambu_lab_print_2
+      data:
+        value: '{{ states(''input_text.bambu_lab_print_1'') }}'
+
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.bambu_lab_print_1
+      data:
+        value: '{{ timestamp }}|{{ material_name }}|{{ material_color }}|{{ weight_used }}g|${{ print_cost }}'
+
+    # Send notification
+    - action: persistent_notification.create
+      data:
+        title: "Print #{{ print_count }} Complete"
+        message: >
+          **Cost**: ${{ print_cost }}
+
+          **Material**: {{ material_name }} ({{ material_type }})
+
+          **Color**: {{ material_color }}
+
+          **Weight**: {{ weight_used }}g
+
+          **Cost/kg**: ${{ cost_per_kg }}
+
+          ---
+
+          **Total Prints**: {{ print_count }}
+
+          **Total Spent**: ${{ new_total }}
+  mode: single
+```
+
+### CSV Print History
+
+The automation creates a CSV file at `/config/bambu_print_history.csv` with the following format:
+
+```csv
+Print#,Date,Material Name,Material Type,Color,Weight(g),Cost($),Total Cost($)
+1,2024-01-15 14:23:45,Bambu PLA Basic,pla basic,Red,45.2,1.04,1.04
+2,2024-01-15 18:12:30,PolyTerra PLA,pla,Blue,32.8,0.75,1.79
+```
+
+### Customizing Material Costs
+
+Edit the `cost_map` in the automation to match your filament prices:
+
+```yaml
+cost_per_kg: >
+  {% set cost_map = {
+    'pla': 22.99,
+    'pla basic': 22.99,
+    'petg': 25.00,
+    'abs': 30.00,
+    'tpu': 35.00,
+    'asa': 32.00
+  } %}
+  {{ cost_map.get(material_type, 20.00) }}
+```
+
+### Available Sensors
+
+After setup, you'll have these sensors:
+
+- `sensor.bambu_lab_total_filament_cost` - Total spent on all prints
+- `sensor.bambu_lab_average_print_cost` - Average cost per print
+- `sensor.bambu_lab_daily_cost` - Daily filament spending
+- `sensor.bambu_lab_weekly_cost` - Weekly filament spending
+- `sensor.bambu_lab_monthly_cost` - Monthly filament spending
+- `input_number.bambu_lab_print_counter` - Total number of prints
+- `input_text.bambu_lab_print_1` through `input_text.bambu_lab_print_5` - Last 5 print details
+
+### Dashboard Example
+
+You can create a dashboard card to display your print costs:
+
+```yaml
+type: entities
+title: Print Cost Tracking
+entities:
+  - entity: sensor.bambu_lab_total_filament_cost
+    name: Total Spent
+  - entity: sensor.bambu_lab_average_print_cost
+    name: Average Per Print
+  - entity: input_number.bambu_lab_print_counter
+    name: Total Prints
+  - type: divider
+  - entity: sensor.bambu_lab_daily_cost
+    name: Today
+  - entity: sensor.bambu_lab_weekly_cost
+    name: This Week
+  - entity: sensor.bambu_lab_monthly_cost
+    name: This Month
+  - type: divider
+  - entity: input_text.bambu_lab_print_1
+    name: Last Print
+  - entity: input_text.bambu_lab_print_2
+    name: Print #-1
+  - entity: input_text.bambu_lab_print_3
+    name: Print #-2
+```
+
+---
+
 ## Contributing
 
 Pull requests are welcome! Please follow the standard GitHub workflow:
