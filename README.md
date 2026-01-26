@@ -165,7 +165,7 @@ variables:
        and trigger.from_state.state not in ['', 'unknown', 'unavailable', None] %}
        {{ trigger.from_state.state | int }}
     {% else %}
-       None
+       {{ none }}
     {% endif %}
 
   tray_number: >-
@@ -174,17 +174,17 @@ variables:
       {% if t not in ['', 'unknown', 'unavailable', None] %}
         {{ t | int }}
       {% else %}
-        None
+        {{ none }}
       {% endif %}
     {% else %}
       {{ old_tray }}
     {% endif %}
 
   tray_sensor: >-
-    {% if tray_number and tray_number > 0 %}
-      sensor.ID_PRINTER_ams_1_tray_{{ tray_number }}
+    {% if (tray_number | int(-1)) > 0 %}
+      sensor.ID_PRINTER_ams_1_tray_{{ tray_number | int }}
     {% else %}
-      None
+      {{ none }}
     {% endif %}
 
   tray_weight: "{{ states('sensor.ID_PRINTER_filament_usage_meter') | float(0) | round(2) }}"
@@ -198,7 +198,7 @@ action:
 
       - conditions:
           - condition: template
-            value_template: "{{ trigger.id == 'tray' and old_tray is not none and old_tray > 0 }}"
+            value_template: "{{ trigger.id == 'tray' and (old_tray | int(-1)) > 0 }}"
         sequence:
           - service: rest_command.update_spool
             data:
@@ -219,7 +219,7 @@ action:
           - condition: template
             value_template: >
               {{ trigger.id == 'print_end'
-                 and tray_number is not none and tray_number > 0
+                 and (tray_number | int(-1)) > 0
                  and trigger.from_state is not none
                  and trigger.from_state.state in ['printing','pause'] }}
         sequence:
@@ -284,8 +284,7 @@ input_number:
   - choose:
     - conditions:
       - condition: template
-        value_template: '{{ trigger.id == ''tray'' and old_tray is not none and old_tray
-          > 0 }}'
+        value_template: '{{ trigger.id == ''tray'' and (old_tray | int(-1)) > 0 }}'
       sequence:
       - data:
           message: 'Tray wissel: oude tray {{ old_tray }} → {{ name }} ({{ material
@@ -318,8 +317,7 @@ input_number:
         action: system_log.write
     - conditions:
       - condition: template
-        value_template: '{{ trigger.id == ''print_end'' and tray_number is not none
-          and tray_number > 0 }}'
+        value_template: '{{ trigger.id == ''print_end'' and (tray_number | int(-1)) > 0 }}'
       sequence:
       - data:
           message: 'Print-einde: Tray {{ tray_number }} → {{ name }} ({{ material
@@ -340,13 +338,10 @@ input_number:
           value: '0'
         action: utility_meter.calibrate
   variables:
-    old_tray: "{% if trigger.id == 'tray'\n      and trigger.from_state.state not
-      in [None, '', 'unknown', 'unavailable'] %}\n  {{ trigger.from_state.state |
-      int }}\n{% else %}\n  None\n{% endif %}"
+    old_tray: "{% if trigger.id == 'tray'\n      and trigger.from_state.state not in [None, '', 'unknown', 'unavailable'] %}\n  {{ trigger.from_state.state | int }}\n{% else %}\n  {{ none }}\n{% endif %}"
     tray_number: "{% if trigger.id == 'print_end' %}\n  {{ states('input_number.bambulab_last_tray')
       | int }}\n{% else %}\n  {{ old_tray }}\n{% endif %}"
-    tray_sensor: "{% if tray_number %}\n  sensor.ID_PRINTER_ams_1_tray_{{
-      tray_number }}\n{% else %}\n  None\n{% endif %}"
+    tray_sensor: "{% if (tray_number | int(-1)) > 0 %}\n  sensor.ID_PRINTER_ams_1_tray_{{ tray_number | int }}\n{% else %}\n  {{ none }}\n{% endif %}"
     tray_weight: '{{ states(''sensor.bambulab_filament_usage_meter'') | float(0) |
       round(2) }}'
     tag_uid: '{{ state_attr(tray_sensor, ''tag_uid'') if tray_sensor else None }}'
